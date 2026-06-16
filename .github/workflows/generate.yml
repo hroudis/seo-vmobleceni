@@ -1,0 +1,52 @@
+name: Generování meta popisů
+
+# Kdy se spustí:
+on:
+  # 1) Automaticky podle plánu – každý den ve 2:00 ráno (UTC; v ČR ~3-4 ráno)
+  schedule:
+    - cron: "0 2 * * *"
+  # 2) Ručně tlačítkem v záložce Actions (kdykoli si budeš chtít hned spustit)
+  workflow_dispatch:
+
+# Oprávnění, aby mohl běh uložit stav zpět do repozitáře
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Stáhnout repozitář
+        uses: actions/checkout@v4
+
+      - name: Nastavit Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Nainstalovat knihovny
+        run: pip install openpyxl
+
+      - name: Vygenerovat meta popisy
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FEED_URL: ${{ secrets.FEED_URL }}
+          BATCH_LIMIT: "500"          # max nových produktů za jeden běh (uprav dle potřeby)
+          MODEL: "claude-haiku-4-5-20251001"
+          # CATEGORY_FILTER: "Šaty"   # odkomentuj pro generování jen jedné kategorie
+        run: python generate_meta.py
+
+      - name: Uložit hotové soubory ke stažení
+        uses: actions/upload-artifact@v4
+        with:
+          name: meta-popisy
+          path: output/*
+          retention-days: 30
+
+      - name: Uložit stav zpět do repozitáře
+        run: |
+          git config user.name "seo-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add state.json
+          git commit -m "Aktualizace stavu generování" || echo "Nic nového k uložení"
+          git push || echo "Push přeskočen"
