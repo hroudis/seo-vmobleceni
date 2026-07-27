@@ -34,6 +34,10 @@ from datetime import datetime, timezone
 # ---------- konfigurace (z proměnných prostředí) ----------
 API_KEY   = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 FEED_URL  = os.environ.get("FEED_URL", "").strip()
+# volitelný DRUHÝ feed (např. kompletní export přímo ze Shoptetu, vedle
+# dodavatelského/Mergado feedu) — produkty z obou zdrojů se sloučí,
+# duplicity (stejný CODE) se berou jen jednou. Nepovinné.
+FEED_URL_2 = os.environ.get("FEED_URL_2", "").strip()
 MODEL     = os.environ.get("MODEL", "claude-haiku-4-5-20251001").strip()
 # kolik NOVÝCH produktů max zpracovat za jeden běh (kontrola nákladů)
 BATCH_LIMIT = int(os.environ.get("BATCH_LIMIT", "500"))
@@ -270,6 +274,23 @@ def main():
     done = state["done"]
 
     items = parse_feed(fetch_feed(FEED_URL))
+    for p in items:
+        p["source"] = "mergado"   # primární/dodavatelský feed -> jde i do mergado-meta.csv
+
+    if FEED_URL_2:
+        items2 = parse_feed(fetch_feed(FEED_URL_2))
+        for p in items2:
+            p["source"] = "shoptet"  # produkty vlastní/přímo v Shoptetu
+        # sloučení: pokud se produkt (podle id) vyskytuje v obou feedech,
+        # ponecháme verzi z prvního (mergado) feedu, ať se nezdvojí.
+        seen_ids = {p["id"] for p in items}
+        added = 0
+        for p in items2:
+            if p["id"] not in seen_ids:
+                items.append(p)
+                seen_ids.add(p["id"])
+                added += 1
+        log(f"Druhý feed (Shoptet): {len(items2)} produktů, {added} nových (zbytek už byl v prvním feedu)")
 
     # filtr kategorie (volitelně)
     if CATEGORY_FILTER:
@@ -283,16 +304,28 @@ def main():
         log(f"Přeskakuji {len(pre_filled)} produktů s již vyplněným meta popisem v e-shopu.")
     items = [p for p in items if not p.get("existing_meta")]
 
-    # seskupit podle názvu (varianty sdílí popis) a vzít jen nové
-    seen_names = {}
+    # ---------- seskupení podle názvu ----------
+    # Jedna skupina = jeden vygenerovaný popis. Skupina nese VŠECHNY kódy
+    # (a zdroje) všech položek se stejným názvem — díky tomu export čte
+    # popisy přímo odsud, žádné druhé „hádání podle názvu" (to byl zdroj
+    # chyby: dva různé produkty se stejným názvem si navzájem přepisovaly
+    # popis v odděleném exportním kroku).
+    groups = {}
     for p in items:
         key = p["name"].strip().lower()
-        if key not in seen_names:
-            seen_names[key] = p
+        if key not in groups:
+            groups[key] = {
+                "id": p["id"], "name": p["name"], "category": p["category"],
+                "material": p["material"], "desc": p["desc"],
+                "codes": [], "sources": set(),
+            }
+        g = groups[key]
+        g["codes"].extend(p["codes"])
+        g["sources"].add(p.get("source", "mergado"))
 
-    todo = [p for key, p in seen_names.items() if p["id"] not in done]
-    log(f"Unikátních názvů: {len(seen_names)} | už hotovo: "
-        f"{sum(1 for p in seen_names.values() if p['id'] in done)} | "
+    todo = [g for g in groups.values() if g["id"] not in done]
+    log(f"Unikátních názvů: {len(groups)} | už hotovo: "
+        f"{sum(1 for g in groups.values() if g['id'] in done)} | "
         f"nových ke zpracování: {len(todo)}")
 
     if not todo:
@@ -335,25 +368,25 @@ def main():
     log(f"Vygenerováno: {ok} ok, {err} chyb")
 
     # ---------- export CSV + XLSX (kompletní, pro Shoptet import) ----------
-    # propíše hotové popisy do VŠECH variant podle názvu
-    name_to_meta = {}
-    for code, d in done.items():
-        nm = d.get("name", "").strip().lower()
-        if nm:
-            name_to_meta[nm] = d
-
+    # čte se PŘÍMO ze `groups` (skupina má id, kterým se sáhne do `done`) —
+    # žádné rekonstruování přes název, takže se nemůže stát, že si dva
+    # produkty se stejným názvem přepíšou popis.
     rows = []
-    for p in items:
-        d = name_to_meta.get(p["name"].strip().lower())
+    for g in groups.values():
+        d = done.get(g["id"])
         if not d:
             continue
-        for code in p["codes"]:   # jeden řádek na variantu — skutečné kódy zboží
+        # zdroj řádku: pokud skupina vznikla jen z mergado položek -> mergado,
+        # jinak (obsahuje i shoptet položku) řádek patří i do shoptet exportu
+        row_source = "shoptet" if "shoptet" in g["sources"] and "mergado" not in g["sources"] else "mergado"
+        for code in g["codes"]:   # jeden řádek na variantu — skutečné kódy zboží
             rows.append({
                 "code": code,
-                "name": p["name"],
+                "name": g["name"],
                 "metaDescription": d["meta"],
                 "seoTitle": d["seo_title"],
-                "categoryText": p["category"],
+                "categoryText": g["category"],
+                "source": row_source,
             })
 
     stamp = datetime.now().strftime("%Y-%m-%d")
@@ -361,26 +394,32 @@ def main():
     with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["code", "name", "metaDescription", "seoTitle", "categoryText"], delimiter=";")
         w.writeheader()
-        w.writerows(rows)
+        w.writerows({k: v for k, v in r.items() if k != "source"} for r in rows)
 
-    # stabilní kopie pro Shoptet (neměnná URL pro případný automatický import)
+    # stabilní kopie pro Shoptet — JEN produkty výhradně mimo Mergado (source=="shoptet").
+    # Produkty z Mergado feedu se do Shoptetu propíší automaticky přes Mergado
+    # import, takže je sem záměrně nedáváme (žádný zbytečný duplicitní import).
+    shoptet_rows = [r for r in rows if r["source"] == "shoptet"]
     stable_path = os.path.join(OUTPUT_DIR, "shoptet-meta.csv")
     with open(stable_path, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["code", "name", "metaDescription", "seoTitle", "categoryText"], delimiter=";")
         w.writeheader()
-        w.writerows(rows)
-    log(f"Uloženo: {stable_path} (stabilní URL pro Shoptet)")
+        w.writerows({k: v for k, v in r.items() if k != "source"} for r in shoptet_rows)
+    log(f"Uloženo: {stable_path} ({len(shoptet_rows)} řádků — jen produkty mimo Mergado, stabilní URL pro Shoptet)")
 
     # ---------- export pro MERGADO (pravidlo Import datového souboru) ----------
+    # Jen produkty z dodavatelského/Mergado feedu (source == "mergado") —
+    # produkty přidané čistě v Shoptetu tam nejsou (Mergado o nich neví).
     # Sloupce se musí jmenovat PŘESNĚ jako elementy v Mergadu.
     # Párovací klíč = CODE (kód varianty). Bez BOM (Mergado BOM neumí).
+    mergado_rows = [r for r in rows if r["source"] == "mergado"]
     mergado_path = os.path.join(OUTPUT_DIR, "mergado-meta.csv")
     with open(mergado_path, "w", encoding="utf-8", newline="") as f:
         w = csv.writer(f, delimiter=";")
         w.writerow(["CODE", "META_DESCRIPTION", "SEO_TITLE"])
-        for r in rows:
+        for r in mergado_rows:
             w.writerow([r["code"], r["metaDescription"], r["seoTitle"]])
-    log(f"Uloženo: {mergado_path} (pro Mergado import)")
+    log(f"Uloženo: {mergado_path} ({len(mergado_rows)} řádků, pro Mergado import)")
     log(f"Uloženo: {csv_path} ({len(rows)} řádků)")
 
     # XLSX jen pokud je dostupná knihovna openpyxl
