@@ -142,7 +142,7 @@ def parse_feed(data):
         if not codes and pid:
             codes = [pid]
 
-        # složení z TEXT_PROPERTY (NAME ~ "Složení")
+        # složení z TEXT_PROPERTY (Shoptet nativní) nebo INFORMATION_PARAMETER (Mergado)
         material = ""
         for tp in it.iter("TEXT_PROPERTY"):
             nm = tp.find("NAME")
@@ -150,6 +150,13 @@ def parse_feed(data):
             if nm is not None and nm.text and re.search(r"slož|sloz", nm.text, re.I) and vl is not None:
                 material = re.sub(r"^\d+\.\s*", "", strip_html(vl.text))
                 break
+        if not material:
+            for ip in it.iter("INFORMATION_PARAMETER"):
+                nm = ip.find("NAME")
+                vl = ip.find("VALUE")
+                if nm is not None and nm.text and re.search(r"slož|sloz", nm.text, re.I) and vl is not None and vl.text:
+                    material = strip_html(vl.text)
+                    break
 
         desc_el = it.find("DESCRIPTION")
         desc = strip_html(desc_el.text)[:300] if desc_el is not None else ""
