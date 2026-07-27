@@ -56,7 +56,7 @@ Texty musí fungovat pro klasické vyhledávače (Google, Seznam) i pro AI vyhle
 
 Vytvoř:
 1. meta_description: český meta popis, 140–155 znaků. Struktura: věcný popis s konkrétními atributy → benefit → jemná výzva k akci. Žádné uvozovky, žádné kódy produktu.
-2. seo_title: SEO titulek do 60 znaků, typ produktu na začátku, na konci " | VMObleceni.cz"."""
+2. seo_title: SEO titulek do 60 znaků, typ produktu na začátku, na konci " | vmobleceni.cz"."""
 
 
 def log(msg):
