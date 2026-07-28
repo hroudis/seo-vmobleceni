@@ -408,18 +408,27 @@ def main():
     log(f"Uloženo: {stable_path} ({len(shoptet_rows)} řádků — jen produkty mimo Mergado, stabilní URL pro Shoptet)")
 
     # ---------- export pro MERGADO (pravidlo Import datového souboru) ----------
-    # Jen produkty z dodavatelského/Mergado feedu (source == "mergado") —
-    # produkty přidané čistě v Shoptetu tam nejsou (Mergado o nich neví).
+    # JEDEN ŘÁDEK NA PRODUKT (ne na variantu) — u vícevariantních produktů je
+    # CODE v Mergadu "vícenásobný element" (jeden kód na variantu), zatímco
+    # META_DESCRIPTION je hodnota na celý produkt. Párování 5 kódů -> 1 cíl
+    # dělalo Mergadu problém a pravidlo se na takové produkty vůbec nepustilo.
+    # Bereme proto jen PRVNÍ kód každého produktu jako reprezentativní.
     # Sloupce se musí jmenovat PŘESNĚ jako elementy v Mergadu.
-    # Párovací klíč = CODE (kód varianty). Bez BOM (Mergado BOM neumí).
-    mergado_rows = [r for r in rows if r["source"] == "mergado"]
+    # Bez BOM (Mergado BOM neumí).
     mergado_path = os.path.join(OUTPUT_DIR, "mergado-meta.csv")
+    mergado_count = 0
     with open(mergado_path, "w", encoding="utf-8", newline="") as f:
         w = csv.writer(f, delimiter=";")
         w.writerow(["CODE", "META_DESCRIPTION", "SEO_TITLE"])
-        for r in mergado_rows:
-            w.writerow([r["code"], r["metaDescription"], r["seoTitle"]])
-    log(f"Uloženo: {mergado_path} ({len(mergado_rows)} řádků, pro Mergado import)")
+        for g in groups.values():
+            if "mergado" not in g["sources"] or not g["codes"]:
+                continue
+            d = done.get(g["id"])
+            if not d:
+                continue
+            w.writerow([g["codes"][0], d["meta"], d["seo_title"]])
+            mergado_count += 1
+    log(f"Uloženo: {mergado_path} ({mergado_count} řádků — 1 na produkt, pro Mergado import)")
     log(f"Uloženo: {csv_path} ({len(rows)} řádků)")
 
     # XLSX jen pokud je dostupná knihovna openpyxl
