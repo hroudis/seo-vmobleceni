@@ -31,6 +31,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           FEED_URL: ${{ secrets.FEED_URL }}
+          FEED_URL_2: ${{ secrets.FEED_URL_2 }}   # volitelné: kompletní Shoptet export (produkty mimo Mergado)
           BATCH_LIMIT: "99999"        # plný průjezd; sniž např. na 500 pro opatrné dávky
           CONCURRENCY: "4"            # souběžné požadavky (4-6 bezpečné)
           MODEL: "claude-haiku-4-5-20251001"
@@ -48,6 +49,6 @@ jobs:
         run: |
           git config user.name "seo-bot"
           git config user.email "bot@users.noreply.github.com"
-          git add state.json output/mergado-meta.csv output/shoptet-meta.csv
+          git add state.json output/mergado-meta.csv output/mergado-meta-variants.csv output/shoptet-meta.csv
           git commit -m "Aktualizace stavu a meta CSV" || echo "Nic nového k uložení"
           git push || echo "Push přeskočen"
