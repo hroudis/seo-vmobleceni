@@ -433,6 +433,28 @@ def main():
             w.writerow([g["name"], g["codes"][0], d["meta"], d["seo_title"]])
             mergado_count += 1
     log(f"Uloženo: {mergado_path} ({mergado_count} řádků — 1 na produkt, pro Mergado import)")
+
+    # ---------- druhý export: JEDEN ŘÁDEK NA VARIANTU (pro variantní produkty) ----------
+    # Pro produkty s > 1 variantou je CODE v Mergadu zanořený uvnitř
+    # VARIANTS > VARIANT > CODE. V pravidle importu proto tenhle soubor
+    # napoj se ZADANOU CESTOU K ELEMENTU (element-path): "VARIANTS | VARIANT | CODE"
+    # jako párovací klíč — ne jen obecné "CODE" (to hledá jen na úrovni
+    # produktu a u variantních produktů tam nic nenajde).
+    variants_path = os.path.join(OUTPUT_DIR, "mergado-meta-variants.csv")
+    variants_count = 0
+    with open(variants_path, "w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f, delimiter=";")
+        w.writerow(["CODE", "META_DESCRIPTION", "SEO_TITLE"])
+        for g in groups.values():
+            if "mergado" not in g["sources"] or len(g["codes"]) < 2:
+                continue  # jen skutečně variantní produkty (2+ kódy)
+            d = done.get(g["id"])
+            if not d:
+                continue
+            for code in g["codes"]:
+                w.writerow([code, d["meta"], d["seo_title"]])
+                variants_count += 1
+    log(f"Uloženo: {variants_path} ({variants_count} řádků — 1 na variantu, pro pravidlo s cestou VARIANTS|VARIANT|CODE)")
     log(f"Uloženo: {csv_path} ({len(rows)} řádků)")
 
     # XLSX jen pokud je dostupná knihovna openpyxl
