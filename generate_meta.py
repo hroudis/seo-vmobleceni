@@ -440,45 +440,45 @@ def main():
     # napoj se ZADANOU CESTOU K ELEMENTU (element-path): "VARIANTS | VARIANT | CODE"
     # jako párovací klíč — ne jen obecné "CODE" (to hledá jen na úrovni
     # produktu a u variantních produktů tam nic nenajde).
-    variants_path = os.path.join(OUTPUT_DIR, "mergado-meta-variants.csv")
-    variants_count = 0
-    variant_rows_cache = []  # uložíme si řádky, ať je nemusíme počítat 2x
+    # ---------- XML export pro variantní produkty ----------
+    # Stejná hierarchie jako zdrojový feed: SHOPITEM > VARIANTS > VARIANT > CODE,
+    # META_DESCRIPTION a SEO_TITLE na úrovni produktu (ne zanořené). Mergado umí
+    # importovat i XML ("Import datového souboru CSV/XML") — když má soubor
+    # STEJNÝ tvar jako jeho vlastní feed, mělo by přirozeně poznat, že CODE
+    # patří do VARIANTS>VARIANT a META_DESCRIPTION/SEO_TITLE na produkt.
+    variants_xml_path = os.path.join(OUTPUT_DIR, "mergado-meta-variants.xml")
+
+    def esc_xml(s):
+        return (str(s or "")
+                .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+    xml_parts = ['<?xml version="1.0" encoding="UTF-8"?>', "<SHOP>"]
+    xml_variant_count = 0
+    xml_product_count = 0
     for g in groups.values():
         if "mergado" not in g["sources"] or len(g["codes"]) < 2:
             continue  # jen skutečně variantní produkty (2+ kódy)
         d = done.get(g["id"])
         if not d:
             continue
+        xml_product_count += 1
+        xml_parts.append("<SHOPITEM>")
+        xml_parts.append(f"<NAME>{esc_xml(g['name'])}</NAME>")
+        xml_parts.append(f"<META_DESCRIPTION>{esc_xml(d['meta'])}</META_DESCRIPTION>")
+        xml_parts.append(f"<SEO_TITLE>{esc_xml(d['seo_title'])}</SEO_TITLE>")
+        xml_parts.append("<VARIANTS>")
         for code in g["codes"]:
-            variant_rows_cache.append((code, d["meta"], d["seo_title"]))
-    variants_count = len(variant_rows_cache)
+            xml_parts.append(f"<VARIANT><CODE>{esc_xml(code)}</CODE></VARIANT>")
+            xml_variant_count += 1
+        xml_parts.append("</VARIANTS>")
+        xml_parts.append("</SHOPITEM>")
+    xml_parts.append("</SHOP>")
 
-    # varianta A: obyčejná hlavička "CODE" (co jsme zkoušeli dosud)
-    with open(variants_path, "w", encoding="utf-8", newline="") as f:
-        w = csv.writer(f, delimiter=";")
-        w.writerow(["CODE", "META_DESCRIPTION", "SEO_TITLE"])
-        for row in variant_rows_cache:
-            w.writerow(row)
-    log(f"Uloženo: {variants_path} ({variants_count} řádků, hlavička 'CODE')")
+    with open(variants_xml_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(xml_parts))
+    log(f"Uloženo: {variants_xml_path} ({xml_product_count} produktů, {xml_variant_count} variant — XML se stejnou hierarchií jako zdrojový feed)")
 
-    # varianta B: hlavička jako CESTA K ELEMENTU, se svislítkem (jak to Mergado
-    # zobrazuje ve svém vlastním rozhraní: "VARIANTS | VARIANT | CODE")
-    path_pipe = os.path.join(OUTPUT_DIR, "mergado-meta-variants-path-pipe.csv")
-    with open(path_pipe, "w", encoding="utf-8", newline="") as f:
-        w = csv.writer(f, delimiter=";")
-        w.writerow(["VARIANTS | VARIANT | CODE", "META_DESCRIPTION", "SEO_TITLE"])
-        for row in variant_rows_cache:
-            w.writerow(row)
-    log(f"Uloženo: {path_pipe} ({variants_count} řádků, hlavička 'VARIANTS | VARIANT | CODE')")
-
-    # varianta C: hlavička s cestou přes ">"
-    path_gt = os.path.join(OUTPUT_DIR, "mergado-meta-variants-path-gt.csv")
-    with open(path_gt, "w", encoding="utf-8", newline="") as f:
-        w = csv.writer(f, delimiter=";")
-        w.writerow(["VARIANTS > VARIANT > CODE", "META_DESCRIPTION", "SEO_TITLE"])
-        for row in variant_rows_cache:
-            w.writerow(row)
-    log(f"Uloženo: {path_gt} ({variants_count} řádků, hlavička 'VARIANTS > VARIANT > CODE')")
+    variants_count = xml_variant_count
     log(f"Uloženo: {csv_path} ({len(rows)} řádků)")
 
     # XLSX jen pokud je dostupná knihovna openpyxl
