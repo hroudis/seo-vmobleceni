@@ -442,19 +442,43 @@ def main():
     # produktu a u variantních produktů tam nic nenajde).
     variants_path = os.path.join(OUTPUT_DIR, "mergado-meta-variants.csv")
     variants_count = 0
+    variant_rows_cache = []  # uložíme si řádky, ať je nemusíme počítat 2x
+    for g in groups.values():
+        if "mergado" not in g["sources"] or len(g["codes"]) < 2:
+            continue  # jen skutečně variantní produkty (2+ kódy)
+        d = done.get(g["id"])
+        if not d:
+            continue
+        for code in g["codes"]:
+            variant_rows_cache.append((code, d["meta"], d["seo_title"]))
+    variants_count = len(variant_rows_cache)
+
+    # varianta A: obyčejná hlavička "CODE" (co jsme zkoušeli dosud)
     with open(variants_path, "w", encoding="utf-8", newline="") as f:
         w = csv.writer(f, delimiter=";")
         w.writerow(["CODE", "META_DESCRIPTION", "SEO_TITLE"])
-        for g in groups.values():
-            if "mergado" not in g["sources"] or len(g["codes"]) < 2:
-                continue  # jen skutečně variantní produkty (2+ kódy)
-            d = done.get(g["id"])
-            if not d:
-                continue
-            for code in g["codes"]:
-                w.writerow([code, d["meta"], d["seo_title"]])
-                variants_count += 1
-    log(f"Uloženo: {variants_path} ({variants_count} řádků — 1 na variantu, pro pravidlo s cestou VARIANTS|VARIANT|CODE)")
+        for row in variant_rows_cache:
+            w.writerow(row)
+    log(f"Uloženo: {variants_path} ({variants_count} řádků, hlavička 'CODE')")
+
+    # varianta B: hlavička jako CESTA K ELEMENTU, se svislítkem (jak to Mergado
+    # zobrazuje ve svém vlastním rozhraní: "VARIANTS | VARIANT | CODE")
+    path_pipe = os.path.join(OUTPUT_DIR, "mergado-meta-variants-path-pipe.csv")
+    with open(path_pipe, "w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f, delimiter=";")
+        w.writerow(["VARIANTS | VARIANT | CODE", "META_DESCRIPTION", "SEO_TITLE"])
+        for row in variant_rows_cache:
+            w.writerow(row)
+    log(f"Uloženo: {path_pipe} ({variants_count} řádků, hlavička 'VARIANTS | VARIANT | CODE')")
+
+    # varianta C: hlavička s cestou přes ">"
+    path_gt = os.path.join(OUTPUT_DIR, "mergado-meta-variants-path-gt.csv")
+    with open(path_gt, "w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f, delimiter=";")
+        w.writerow(["VARIANTS > VARIANT > CODE", "META_DESCRIPTION", "SEO_TITLE"])
+        for row in variant_rows_cache:
+            w.writerow(row)
+    log(f"Uloženo: {path_gt} ({variants_count} řádků, hlavička 'VARIANTS > VARIANT > CODE')")
     log(f"Uloženo: {csv_path} ({len(rows)} řádků)")
 
     # XLSX jen pokud je dostupná knihovna openpyxl
