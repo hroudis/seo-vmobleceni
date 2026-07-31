@@ -171,6 +171,7 @@ def parse_feed(data):
 
         items.append({
             "id": pid or (codes[0] if codes else name),
+            "shopitem_id": pid,   # skutečný atribut id na SHOPITEM, prázdné pokud chybí
             "codes": codes,
             "name": name,
             "category": category,
@@ -317,11 +318,13 @@ def main():
             groups[key] = {
                 "id": p["id"], "name": p["name"], "category": p["category"],
                 "material": p["material"], "desc": p["desc"],
-                "codes": [], "sources": set(),
+                "codes": [], "sources": set(), "shopitem_ids": set(),
             }
         g = groups[key]
         g["codes"].extend(p["codes"])
         g["sources"].add(p.get("source", "mergado"))
+        if p.get("shopitem_id"):
+            g["shopitem_ids"].add(p["shopitem_id"])
 
     todo = [g for g in groups.values() if g["id"] not in done]
     log(f"Unikátních názvů: {len(groups)} | už hotovo: "
@@ -408,77 +411,35 @@ def main():
     log(f"Uloženo: {stable_path} ({len(shoptet_rows)} řádků — jen produkty mimo Mergado, stabilní URL pro Shoptet)")
 
     # ---------- export pro MERGADO (pravidlo Import datového souboru) ----------
-    # Přidán sloupec NAME: u vícevariantních produktů je CODE v Mergadu
-    # "vícenásobný element" (zanořený uvnitř VARIANTS>VARIANT), zatímco
-    # META_DESCRIPTION je hodnota na celý produkt (nezanořená) — párování podle
-    # CODE proto u variantních produktů selhávalo. NAME je vždy na úrovni
-    # produktu (nikdy zanořené) a je to oficiálně podporovaný párovací element
-    # v Mergadu — proto ho nabízíme jako alternativní párovací klíč.
-    # CODE necháváme v souboru taky, pro případ že by párování na NAME
-    # nefungovalo tak dobře jako se čeká (menší riziko kolize při identickém
-    # názvu dvou různých produktů).
-    # Sloupce se musí jmenovat PŘESNĚ jako elementy v Mergadu.
-    # Bez BOM (Mergado BOM neumí).
+    # Podle podpory Mergada: párovací klíč MUSÍ být první sloupec a musí
+    # existovat na úrovni MASTER položky (CODE u variantních produktů tam
+    # není — proto předchozí pokusy nefungovaly). Použijeme @id — číselný
+    # atribut SHOPITEM, jednoznačný a vždy na úrovni produktu, funguje
+    # stejně pro jednoduché i variantní produkty. CODE ani NAME v souboru
+    # záměrně nejsou (aby žádný jiný sloupec omylem nešel přepsat).
     mergado_path = os.path.join(OUTPUT_DIR, "mergado-meta.csv")
     mergado_count = 0
+    skipped_no_id = 0
     with open(mergado_path, "w", encoding="utf-8", newline="") as f:
         w = csv.writer(f, delimiter=";")
-        w.writerow(["NAME", "CODE", "META_DESCRIPTION", "SEO_TITLE"])
+        w.writerow(["@id", "META_DESCRIPTION", "SEO_TITLE"])
         for g in groups.values():
-            if "mergado" not in g["sources"] or not g["codes"]:
+            if "mergado" not in g["sources"]:
                 continue
             d = done.get(g["id"])
             if not d:
                 continue
-            w.writerow([g["name"], g["codes"][0], d["meta"], d["seo_title"]])
-            mergado_count += 1
-    log(f"Uloženo: {mergado_path} ({mergado_count} řádků — 1 na produkt, pro Mergado import)")
+            if not g["shopitem_ids"]:
+                skipped_no_id += 1
+                continue
+            # jeden řádek na KAŽDÝ skutečný @id ve skupině (obvykle 1;
+            # víc jen když víc různých produktů sdílí stejný název)
+            for sid in sorted(g["shopitem_ids"]):
+                w.writerow([sid, d["meta"], d["seo_title"]])
+                mergado_count += 1
+    log(f"Uloženo: {mergado_path} ({mergado_count} řádků, párování přes @id) "
+        f"— {skipped_no_id} produktů přeskočeno (chybí @id v feedu)")
 
-    # ---------- druhý export: JEDEN ŘÁDEK NA VARIANTU (pro variantní produkty) ----------
-    # Pro produkty s > 1 variantou je CODE v Mergadu zanořený uvnitř
-    # VARIANTS > VARIANT > CODE. V pravidle importu proto tenhle soubor
-    # napoj se ZADANOU CESTOU K ELEMENTU (element-path): "VARIANTS | VARIANT | CODE"
-    # jako párovací klíč — ne jen obecné "CODE" (to hledá jen na úrovni
-    # produktu a u variantních produktů tam nic nenajde).
-    # ---------- XML export pro variantní produkty ----------
-    # Stejná hierarchie jako zdrojový feed: SHOPITEM > VARIANTS > VARIANT > CODE,
-    # META_DESCRIPTION a SEO_TITLE na úrovni produktu (ne zanořené). Mergado umí
-    # importovat i XML ("Import datového souboru CSV/XML") — když má soubor
-    # STEJNÝ tvar jako jeho vlastní feed, mělo by přirozeně poznat, že CODE
-    # patří do VARIANTS>VARIANT a META_DESCRIPTION/SEO_TITLE na produkt.
-    variants_xml_path = os.path.join(OUTPUT_DIR, "mergado-meta-variants.xml")
-
-    def esc_xml(s):
-        return (str(s or "")
-                .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
-
-    xml_parts = ['<?xml version="1.0" encoding="UTF-8"?>', "<SHOP>"]
-    xml_variant_count = 0
-    xml_product_count = 0
-    for g in groups.values():
-        if "mergado" not in g["sources"] or len(g["codes"]) < 2:
-            continue  # jen skutečně variantní produkty (2+ kódy)
-        d = done.get(g["id"])
-        if not d:
-            continue
-        xml_product_count += 1
-        xml_parts.append("<SHOPITEM>")
-        xml_parts.append(f"<NAME>{esc_xml(g['name'])}</NAME>")
-        xml_parts.append(f"<META_DESCRIPTION>{esc_xml(d['meta'])}</META_DESCRIPTION>")
-        xml_parts.append(f"<SEO_TITLE>{esc_xml(d['seo_title'])}</SEO_TITLE>")
-        xml_parts.append("<VARIANTS>")
-        for code in g["codes"]:
-            xml_parts.append(f"<VARIANT><CODE>{esc_xml(code)}</CODE></VARIANT>")
-            xml_variant_count += 1
-        xml_parts.append("</VARIANTS>")
-        xml_parts.append("</SHOPITEM>")
-    xml_parts.append("</SHOP>")
-
-    with open(variants_xml_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(xml_parts))
-    log(f"Uloženo: {variants_xml_path} ({xml_product_count} produktů, {xml_variant_count} variant — XML se stejnou hierarchií jako zdrojový feed)")
-
-    variants_count = xml_variant_count
     log(f"Uloženo: {csv_path} ({len(rows)} řádků)")
 
     # XLSX jen pokud je dostupná knihovna openpyxl
