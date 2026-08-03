@@ -290,15 +290,22 @@ def call_api(prompt, retries=3):
             text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
             return parse_loose_json(text)
         except urllib.error.HTTPError as e:
-            last = e
-            # 429 = rate limit, 529 = overloaded → počkat a zkusit znovu
+            # skutečná chybová hláška z těla odpovědi (ne jen kód) — hned vidíme PROČ
+            try:
+                err_body = e.read().decode("utf-8", errors="replace")
+                err_msg = json.loads(err_body).get("error", {}).get("message", err_body)[:200]
+            except Exception:
+                err_msg = str(e)
+            last = RuntimeError(f"HTTP {e.code}: {err_msg}")
+            # 400/401/403/404 = TRVALÁ chyba (špatný požadavek, klíč, nedostatek
+            # kreditu…) — opakování nikdy nepomůže, končíme rovnou bez čekání.
+            if e.code in (400, 401, 403, 404):
+                log(f"  Trvalá chyba API ({e.code}): {err_msg}")
+                raise last
+            # 429/529 = dočasné přetížení → má smysl počkat a zkusit znovu
             wait = 5 * (attempt + 1)
-            if e.code in (429, 529):
-                log(f"  API přetížené ({e.code}), čekám {wait}s…")
-                time.sleep(wait)
-            else:
-                log(f"  HTTP chyba {e.code}, čekám {wait}s…")
-                time.sleep(wait)
+            log(f"  API přetížené/chyba ({e.code}), čekám {wait}s… [{err_msg[:80]}]")
+            time.sleep(wait)
         except Exception as e:
             last = e
             time.sleep(3 * (attempt + 1))
@@ -383,8 +390,13 @@ def main():
 
     ok, err = 0, 0
     lock = threading.Lock()
+    stop_event = threading.Event()
+    consecutive_fail = [0]  # list kvůli mutaci z vláken
+    STOP_AFTER = 15  # po tolika selháních za sebou (bez úspěchu mezi nimi) končíme
 
     def process(p):
+        if stop_event.is_set():
+            raise RuntimeError("Zastaveno (série selhání) — nevoláno")
         res = call_api(build_prompt(p))
         return p, res
 
@@ -402,16 +414,29 @@ def main():
                         "ts": datetime.now(timezone.utc).isoformat(),
                     }
                     ok += 1
+                    consecutive_fail[0] = 0  # úspěch resetuje počítadlo
             except Exception as e:
                 with lock:
                     err += 1
-                log(f"  Produkt {p['id']} selhal: {e}")
+                    consecutive_fail[0] += 1
+                    if consecutive_fail[0] >= STOP_AFTER and not stop_event.is_set():
+                        stop_event.set()
+                        log(f"  ⚠ ZASTAVENO: {STOP_AFTER} chyb za sebou bez úspěchu. "
+                            f"Poslední chyba: {e}")
+                        log("  Nejčastější příčina: došlý kredit na Anthropic API "
+                            "(console.anthropic.com → Billing) nebo neplatný klíč. "
+                            "Zbytek dávky se přeskočí, nic se neztratí — příští běh naváže.")
+                if not stop_event.is_set() or consecutive_fail[0] == STOP_AFTER:
+                    log(f"  Produkt {p['id']} selhal: {e}")
             if i % 25 == 0 or i == len(batch):
                 with lock:
                     log(f"  {i}/{len(batch)} hotovo ({err} chyb)")
                     save_state(state)  # průběžné ukládání
     save_state(state)
-    log(f"Vygenerováno: {ok} ok, {err} chyb")
+    if stop_event.is_set():
+        log(f"Vygenerováno: {ok} ok, {err} chyb — BĚH ZASTAVEN PŘEDČASNĚ kvůli sérii chyb.")
+    else:
+        log(f"Vygenerováno: {ok} ok, {err} chyb")
 
     # ---------- report: co bylo vygenerováno v TOMTO běhu (ke kontrole) ----------
     # Seznam @id (Mergado) i kódů (Shoptet) produktů zpracovaných PRÁVĚ TEĎ —
