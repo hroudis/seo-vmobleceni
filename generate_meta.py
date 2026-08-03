@@ -183,6 +183,45 @@ def parse_feed(data):
     return items
 
 
+def parse_flat_feed(data):
+    """Parser pro PLOCHÝ vlastní XML export ze Shoptetu (Propojení > XML feedy >
+    Přidat XML export, Hlavička/Tělo/Patička) — jeden <SHOPITEM> na KAŽDOU
+    variantu zvlášť, žádné vnořené <VARIANTS>. Očekávané tagy: CODE, NAME
+    (= #CLEAR_PRODUCT_NAME#, tedy BEZ přípony varianty), CATEGORY (#COMPLETE_PATH_PIPE#,
+    oddělovač '|'), MANUFACTURER, DESCRIPTION, EAN.
+    Používá se jako FEED_URL_2 — pro produkty, které Mergado nespravuje."""
+    root = ET.fromstring(data)
+    items = []
+    for it in root.iter("SHOPITEM"):
+        code_el = it.find("CODE")
+        code = (code_el.text or "").strip() if code_el is not None and code_el.text else ""
+        if not code:
+            continue
+        name_el = it.find("NAME")
+        name = (name_el.text or "").strip() if name_el is not None and name_el.text else ""
+        if not name:
+            continue
+        cat_el = it.find("CATEGORY")
+        category = ""
+        if cat_el is not None and cat_el.text:
+            category = cat_el.text.strip().replace("|", " > ")
+        desc_el = it.find("DESCRIPTION")
+        desc = strip_html(desc_el.text)[:300] if desc_el is not None and desc_el.text else ""
+
+        items.append({
+            "id": code,          # plochý feed nemá číselné @id -> použijeme CODE
+            "shopitem_id": "",   # záměrně prázdné: tyhle produkty nejdou do Mergado exportu
+            "codes": [code],
+            "name": name,
+            "category": category,
+            "material": "",
+            "desc": desc,
+            "existing_meta": "",
+        })
+    log(f"Plochý feed obsahuje {len(items)} položek (variant)")
+    return items
+
+
 # ---------- volání Anthropic API ----------
 def build_prompt(p):
     ctx = ""
@@ -279,19 +318,20 @@ def main():
         p["source"] = "mergado"   # primární/dodavatelský feed -> jde i do mergado-meta.csv
 
     if FEED_URL_2:
-        items2 = parse_feed(fetch_feed(FEED_URL_2))
+        items2 = parse_flat_feed(fetch_feed(FEED_URL_2))
         for p in items2:
             p["source"] = "shoptet"  # produkty vlastní/přímo v Shoptetu
-        # sloučení: pokud se produkt (podle id) vyskytuje v obou feedech,
-        # ponecháme verzi z prvního (mergado) feedu, ať se nezdvojí.
-        seen_ids = {p["id"] for p in items}
+        # sloučení: pokud se KÓD vyskytuje v Mergado feedu, produkt je jím
+        # spravovaný -> vynecháme (deduplikace přes CODE, plochý feed nemá @id).
+        seen_codes = set()
+        for p in items:
+            seen_codes.update(p["codes"])
         added = 0
         for p in items2:
-            if p["id"] not in seen_ids:
+            if not any(c in seen_codes for c in p["codes"]):
                 items.append(p)
-                seen_ids.add(p["id"])
                 added += 1
-        log(f"Druhý feed (Shoptet): {len(items2)} produktů, {added} nových (zbytek už byl v prvním feedu)")
+        log(f"Druhý feed (Shoptet, plochý): {len(items2)} položek, {added} nových (zbytek už pokrývá Mergado)")
 
     # filtr kategorie (volitelně)
     if CATEGORY_FILTER:
