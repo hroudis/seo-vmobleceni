@@ -209,7 +209,10 @@ def parse_flat_feed(data):
         desc = strip_html(desc_el.text)[:300] if desc_el is not None and desc_el.text else ""
 
         items.append({
-            "id": code,          # plochý feed nemá číselné @id -> použijeme CODE
+            "id": "flat:" + code,   # prefix "flat:" -> nemůže kolidovat s Mergado @id
+                                     # (u dodavatele FORTOG jsou CODE čistě čísla,
+                                     # stejný formát jako Shoptet interní id -> bez
+                                     # prefixu hrozila kolize a přepsání cizím popisem)
             "shopitem_id": "",   # záměrně prázdné: tyhle produkty nejdou do Mergado exportu
             "codes": [code],
             "name": name,
