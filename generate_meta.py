@@ -413,6 +413,24 @@ def main():
     save_state(state)
     log(f"Vygenerováno: {ok} ok, {err} chyb")
 
+    # ---------- report: co bylo vygenerováno v TOMTO běhu (ke kontrole) ----------
+    # Seznam @id (Mergado) i kódů (Shoptet) produktů zpracovaných PRÁVĚ TEĎ —
+    # ať je jde snadno dohledat a zkontrolovat, bez nutnosti prohledávat celé
+    # rozhraní Mergada/Shoptetu.
+    report_path = os.path.join(OUTPUT_DIR, "posledni-beh-report.csv")
+    with open(report_path, "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f, delimiter=";")
+        w.writerow(["zdroj", "mergado_id", "kod", "nazev", "stav", "cas"])
+        for g in batch:
+            d = done.get(g["id"])
+            stav = "OK" if d else "CHYBA"
+            src = "/".join(sorted(g["sources"]))
+            mid = ", ".join(sorted(g["shopitem_ids"])) if g["shopitem_ids"] else ""
+            kod = g["codes"][0] if g["codes"] else ""
+            ts = d["ts"] if d else ""
+            w.writerow([src, mid, kod, g["name"], stav, ts])
+    log(f"Uloženo: {report_path} ({len(batch)} produktů z TOHOTO běhu, ke kontrole)")
+
     # ---------- export CSV + XLSX (kompletní, pro Shoptet import) ----------
     # čte se PŘÍMO ze `groups` (skupina má id, kterým se sáhne do `done`) —
     # žádné rekonstruování přes název, takže se nemůže stát, že si dva
@@ -445,12 +463,19 @@ def main():
     # stabilní kopie pro Shoptet — JEN produkty výhradně mimo Mergado (source=="shoptet").
     # Produkty z Mergado feedu se do Shoptetu propíší automaticky přes Mergado
     # import, takže je sem záměrně nedáváme (žádný zbytečný duplicitní import).
+    # Kódy začínající nulou dostávají prefix "$" — Shoptetem doporučená ochrana
+    # proti tomu, že Excel při otevření souboru useknuté nuly na začátku smaže
+    # (0123 -> 123), což by rozbilo párování při zpětném importu.
     shoptet_rows = [r for r in rows if r["source"] == "shoptet"]
     stable_path = os.path.join(OUTPUT_DIR, "shoptet-meta.csv")
     with open(stable_path, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["code", "name", "metaDescription", "seoTitle", "categoryText"], delimiter=";")
         w.writeheader()
-        w.writerows({k: v for k, v in r.items() if k != "source"} for r in shoptet_rows)
+        for r in shoptet_rows:
+            row = {k: v for k, v in r.items() if k != "source"}
+            if row["code"].startswith("0"):
+                row["code"] = "$" + row["code"]
+            w.writerow(row)
     log(f"Uloženo: {stable_path} ({len(shoptet_rows)} řádků — jen produkty mimo Mergado, stabilní URL pro Shoptet)")
 
     # ---------- export pro MERGADO (pravidlo Import datového souboru) ----------
