@@ -41,6 +41,10 @@ FEED_URL_2 = os.environ.get("FEED_URL_2", "").strip()
 MODEL     = os.environ.get("MODEL", "claude-haiku-4-5-20251001").strip()
 # kolik NOVÝCH produktů max zpracovat za jeden běh (kontrola nákladů)
 BATCH_LIMIT = int(os.environ.get("BATCH_LIMIT", "500"))
+# ZKUŠEBNÍ REŽIM: "true" = jen ukázat, co by se generovalo, BEZ volání
+# placeného API (nulové náklady). Až se přesvědčíš, že seznam sedí,
+# přepni zpátky na "false" a spusť to samé pro skutečné generování.
+DRY_RUN = os.environ.get("DRY_RUN", "false").strip().lower() in ("1", "true", "yes")
 # kolik požadavků běží souběžně (4-6 je bezpečné vůči rate limitům)
 CONCURRENCY = int(os.environ.get("CONCURRENCY", "4"))
 # volitelně: zpracovat jen produkty obsahující tento řetězec v kategorii
@@ -387,6 +391,26 @@ def main():
     batch = todo[:BATCH_LIMIT]
     if len(todo) > BATCH_LIMIT:
         log(f"Tento běh zpracuje prvních {BATCH_LIMIT} (limit). Zbytek příště.")
+
+    if DRY_RUN:
+        log("=" * 60)
+        log("ZKUŠEBNÍ REŽIM (DRY_RUN=true) — NEVOLÁ SE PLACENÉ API, "
+            "0 Kč útrata. Jen náhled toho, co by se generovalo.")
+        log("=" * 60)
+        preview_path = os.path.join(OUTPUT_DIR, "nahled-co-by-se-generovalo.csv")
+        with open(preview_path, "w", encoding="utf-8-sig", newline="") as f:
+            w = csv.writer(f, delimiter=";")
+            w.writerow(["zdroj", "nazev", "kategorie", "pocet_kodu"])
+            for g in batch:
+                src = "/".join(sorted(g["sources"]))
+                w.writerow([src, g["name"], g["category"], len(g["codes"])])
+        log(f"Uloženo: {preview_path} ({len(batch)} produktů, které by se "
+            f"zpracovaly při skutečném běhu)")
+        log(f"Celkem čeká na zpracování: {len(todo)} (tento běh by vzal "
+            f"prvních {len(batch)} podle BATCH_LIMIT={BATCH_LIMIT})")
+        log("Až seznam zkontroluješ, přepni DRY_RUN na 'false' a spusť "
+            "workflow znovu pro skutečné vygenerování.")
+        return
 
     ok, err = 0, 0
     lock = threading.Lock()
