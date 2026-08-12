@@ -94,13 +94,24 @@ def save_state(state):
 
 
 # ---------- stažení a parsování feedu ----------
-def fetch_feed(url):
+def fetch_feed(url, timeout=180, retries=3):
     log(f"Stahuji feed: {url}")
     req = urllib.request.Request(url, headers={"User-Agent": "SEO-Studio-Bot/1.0"})
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        data = resp.read()
-    log(f"Staženo {len(data)//1024} kB")
-    return data
+    last_err = None
+    for attempt in range(retries):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = resp.read()
+            log(f"Staženo {len(data)//1024} kB")
+            return data
+        except Exception as e:
+            last_err = e
+            if attempt < retries - 1:
+                wait = 15 * (attempt + 1)
+                log(f"  Stažení selhalo ({e}), zkouším znovu za {wait}s… "
+                    f"(pokus {attempt + 2}/{retries})")
+                time.sleep(wait)
+    raise last_err
 
 
 def strip_html(s):
@@ -332,7 +343,13 @@ def main():
         p["source"] = "mergado"   # primární/dodavatelský feed -> jde i do mergado-meta.csv
 
     if FEED_URL_2:
-        items2 = parse_flat_feed(fetch_feed(FEED_URL_2))
+        try:
+            items2 = parse_flat_feed(fetch_feed(FEED_URL_2))
+        except Exception as e:
+            log(f"⚠ Druhý feed (Shoptet) se nepodařilo stáhnout: {e}")
+            log("  Pokračuji jen s prvním feedem (Mergado) — nic se neztrácí, "
+                "produkty mimo Mergado se doplní v některém dalším běhu.")
+            items2 = []
         for p in items2:
             p["source"] = "shoptet"  # produkty vlastní/přímo v Shoptetu
         # sloučení: pokud se KÓD vyskytuje v Mergado feedu, produkt je jím
