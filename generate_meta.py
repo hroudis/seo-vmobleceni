@@ -371,10 +371,16 @@ def main():
         log(f"Filtr kategorie '{CATEGORY_FILTER}': {len(items)} z {before} produktů")
 
     # produkty s už vyplněným meta popisem v e-shopu přeskočit (negenerovat, nepřepisovat)
-    pre_filled = [p for p in items if p.get("existing_meta")]
+    # POZOR: FEED_URL je výstupní feed Mergada, který po importu obsahuje
+    # i NAŠE vygenerované popisy. Vyřadit smíme jen produkty s popisem, který
+    # jsme NEgenerovali my (ručně vyplněný) — naše vlastní musí zůstat v exportu,
+    # jinak vznikne smyčka: import -> feed má meta -> vyřazení z exportu ->
+    # Mergado popis smaže -> znovu...
+    pre_filled = [p for p in items if p.get("existing_meta") and p["id"] not in done]
     if pre_filled:
-        log(f"Přeskakuji {len(pre_filled)} produktů s již vyplněným meta popisem v e-shopu.")
-    items = [p for p in items if not p.get("existing_meta")]
+        log(f"Přeskakuji {len(pre_filled)} produktů s ručně vyplněným meta popisem (negenerovali jsme je).")
+    pre_ids = {id(p) for p in pre_filled}
+    items = [p for p in items if id(p) not in pre_ids]
 
     # ---------- seskupení podle názvu ----------
     # Jedna skupina = jeden vygenerovaný popis. Skupina nese VŠECHNY kódy
@@ -427,7 +433,8 @@ def main():
             f"prvních {len(batch)} podle BATCH_LIMIT={BATCH_LIMIT})")
         log("Až seznam zkontroluješ, přepni DRY_RUN na 'false' a spusť "
             "workflow znovu pro skutečné vygenerování.")
-        return
+        log("Exportní soubory se i tak obnoví z již vygenerovaných popisů (zdarma).")
+        batch = []  # nic negenerovat, ale pokračovat na export
 
     ok, err = 0, 0
     lock = threading.Lock()
@@ -484,7 +491,7 @@ def main():
     # ať je jde snadno dohledat a zkontrolovat, bez nutnosti prohledávat celé
     # rozhraní Mergada/Shoptetu.
     report_path = os.path.join(OUTPUT_DIR, "posledni-beh-report.csv")
-    with open(report_path, "w", encoding="utf-8-sig", newline="") as f:
+    with open(report_path if not DRY_RUN else os.devnull, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f, delimiter=";")
         w.writerow(["zdroj", "mergado_id", "kod", "nazev", "stav", "cas"])
         for g in batch:
