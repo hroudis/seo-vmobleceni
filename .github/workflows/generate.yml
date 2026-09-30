@@ -33,7 +33,7 @@ jobs:
           FEED_URL: ${{ secrets.FEED_URL }}
           FEED_URL_2: ${{ secrets.FEED_URL_2 }}   # volitelné: kompletní Shoptet export (produkty mimo Mergado)
           BATCH_LIMIT: "99999"        # plný průjezd; sniž např. na 500 pro opatrné dávky
-          DRY_RUN: "false"            # "true" = jen NÁHLED, co by se generovalo, 0 Kč útrata (žádné volání API)
+          DRY_RUN: "true"            # "true" = jen NÁHLED, co by se generovalo, 0 Kč útrata (žádné volání API)
           CONCURRENCY: "4"            # souběžné požadavky (4-6 bezpečné)
           MODEL: "claude-haiku-4-5-20251001"
           # CATEGORY_FILTER: "Šaty"   # odkomentuj pro generování jen jedné kategorie
