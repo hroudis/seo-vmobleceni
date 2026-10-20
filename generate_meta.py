@@ -285,12 +285,23 @@ def parse_loose_json(raw):
     raise ValueError("Nelze přečíst odpověď API")
 
 
+class PermanentError(Exception):
+    """Chyba, kterou opakování nevyřeší (a jen by stálo kredit)."""
+
+
 def call_api(prompt, retries=3):
-    body = json.dumps({
+    payload = {
         "model": MODEL,
-        "max_tokens": 1000,
+        "max_tokens": 1500,
         "messages": [{"role": "user", "content": prompt}],
-    }).encode("utf-8")
+    }
+    # Novější modely (např. Haiku 5.5) mají „přemýšlení" zapnuté automaticky —
+    # spotřebuje tokeny i čas a na JSON pak nezbude místo. Pro krátký meta
+    # popis není potřeba, proto ho vypínáme. Starší modely (4.x) parametr
+    # nepotřebují, posíláme ho jen novým.
+    if not re.search(r"-4-|-4$|-3-", MODEL):
+        payload["thinking"] = {"type": "disabled"}
+    body = json.dumps(payload).encode("utf-8")
     headers = {
         "Content-Type": "application/json",
         "x-api-key": API_KEY,
@@ -300,10 +311,17 @@ def call_api(prompt, retries=3):
     for attempt in range(retries):
         try:
             req = urllib.request.Request(API_URL, data=body, headers=headers, method="POST")
-            with urllib.request.urlopen(req, timeout=60) as resp:
+            with urllib.request.urlopen(req, timeout=90) as resp:
                 data = json.loads(resp.read())
             text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
-            return parse_loose_json(text)
+            try:
+                return parse_loose_json(text)
+            except ValueError:
+                # NEopakovat (každý pokus stojí kredit) — rovnou ukázat, co API vrátilo
+                types = [b.get("type") for b in data.get("content", [])]
+                raise PermanentError(
+                    f"Nelze přečíst odpověď API (stop_reason={data.get('stop_reason')}, "
+                    f"bloky={types}, text='{text[:80]}')")
         except urllib.error.HTTPError as e:
             # skutečná chybová hláška z těla odpovědi (ne jen kód) — hned vidíme PROČ
             try:
@@ -321,6 +339,8 @@ def call_api(prompt, retries=3):
             wait = 5 * (attempt + 1)
             log(f"  API přetížené/chyba ({e.code}), čekám {wait}s… [{err_msg[:80]}]")
             time.sleep(wait)
+        except PermanentError:
+            raise
         except Exception as e:
             last = e
             time.sleep(3 * (attempt + 1))
