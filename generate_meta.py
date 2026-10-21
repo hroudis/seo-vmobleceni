@@ -63,7 +63,7 @@ Texty musí fungovat pro klasické vyhledávače (Google, Seznam) i pro AI vyhle
 - přirozený jazyk, jako odpověď na otázku zákazníka.
 
 Vytvoř:
-1. meta_description: český meta popis, 140–155 znaků. Struktura: věcný popis s konkrétními atributy → benefit → jemná výzva k akci. Žádné uvozovky, žádné kódy produktu.
+1. meta_description: český meta popis, 140–155 znaků. Struktura: věcný popis s konkrétními atributy → benefit → jemná výzva k akci. Nepoužívej v textu žádné uvozovky (ani „ “ ani " "), žádné kódy produktu.
 2. seo_title: SEO titulek do 60 znaků, typ produktu na začátku, na konci " | vmobleceni.cz"."""
 
 
@@ -263,6 +263,12 @@ def parse_loose_json(raw):
         return json.loads(t)
     except Exception:
         pass
+    # model dal do textu neescapované uvozovky (např. potisk „Přines mi víno")
+    # -> json.loads selže; vezmeme text mezi klíči jako celek
+    m = re.search(r'"meta_description"\s*:\s*"(.*)"\s*,\s*"seo_title"\s*:\s*"(.*)"\s*}', t, re.S)
+    if m:
+        return {"meta_description": m.group(1).replace('\\"', '"'),
+                "seo_title": m.group(2).replace('\\"', '"')}
     # pokus o záchranu useknutého JSON
     s = t
     if s.count('"') % 2 != 0:
