@@ -432,7 +432,12 @@ def main():
     # jsme NEgenerovali my (ručně vyplněný) — naše vlastní musí zůstat v exportu,
     # jinak vznikne smyčka: import -> feed má meta -> vyřazení z exportu ->
     # Mergado popis smaže -> znovu...
-    pre_filled = [p for p in items if p.get("existing_meta") and p["id"] not in done]
+    # Vyplněný popis v feedu respektujeme JEN když je v pořádku. Vadný popis
+    # (azbuka, useknutý…) je náš dřívější výstup, který Mergado vrátil zpět
+    # do feedu — ten se musí přegenerovat, ne „chránit" jako ruční.
+    pre_filled = [p for p in items
+                  if p.get("existing_meta") and p["id"] not in done
+                  and not output_problem(p["existing_meta"], "x")]
     if pre_filled:
         log(f"Přeskakuji {len(pre_filled)} produktů s ručně vyplněným meta popisem (negenerovali jsme je).")
     pre_ids = {id(p) for p in pre_filled}
