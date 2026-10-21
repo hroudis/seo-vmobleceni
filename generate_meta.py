@@ -609,6 +609,7 @@ def main():
     #                              do Shoptetu přímo (párování přes code)
     def write_shoptet_csv(path, source):
         n = 0
+        seen = set()  # Shoptet páruje kódy BEZ ohledu na velikost písmen
         with open(path, "w", encoding="utf-8-sig", newline="") as f:
             w = csv.writer(f, delimiter=";")
             w.writerow(["code", "metaDescription", "seoTitle"])
@@ -616,6 +617,9 @@ def main():
                 if r["source"] != source:
                     continue
                 code = r["code"]
+                if code.lower() in seen:
+                    continue  # např. AF19115/dr vs AF19115/DR = v Shoptetu tentýž kód
+                seen.add(code.lower())
                 if code.startswith("0"):
                     code = "$" + code
                 w.writerow([code, r["metaDescription"], r["seoTitle"]])
