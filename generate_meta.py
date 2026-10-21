@@ -296,7 +296,16 @@ def output_problem(meta, title):
         return "prázdný popis nebo titulek"
     if FOREIGN_SCRIPT.search(meta + title):
         return "cizí písmo (např. azbuka) v textu"
+    if len(meta) < 80:
+        # useknutý popis — typicky když model dal do textu uvozovky a JSON se
+        # nepodařilo přečíst celý (např. 'Dámské volnočasové šaty z')
+        return "useknutý / příliš krátký popis"
     return None
+
+
+def fix_title(title):
+    """Sjednotí značku na konci titulku na ' | vmobleceni.cz' (malými písmeny)."""
+    return re.sub(r"\s*\|\s*vmobleceni\.cz\s*$", " | vmobleceni.cz", title, flags=re.I)
 
 
 class PermanentError(Exception):
@@ -377,7 +386,7 @@ def main():
         del done[k]
     if bad_ids:
         log(f"Vyřazeno {len(bad_ids)} dříve vygenerovaných popisů s vadou "
-            f"(cizí písmo / prázdné) — vygenerují se znovu.")
+            f"(cizí písmo / prázdné / useknuté) — vygenerují se znovu.")
 
     items = parse_feed(fetch_feed(FEED_URL))
     for p in items:
@@ -572,7 +581,7 @@ def main():
                 "code": code,
                 "name": g["name"],
                 "metaDescription": d["meta"],
-                "seoTitle": d["seo_title"],
+                "seoTitle": fix_title(d["seo_title"]),
                 "categoryText": g["category"],
                 "source": row_source,
             })
@@ -639,7 +648,7 @@ def main():
             # jeden řádek na KAŽDÝ skutečný @id ve skupině (obvykle 1;
             # víc jen když víc různých produktů sdílí stejný název)
             for sid in sorted(g["shopitem_ids"]):
-                w.writerow([sid, d["meta"], d["seo_title"]])
+                w.writerow([sid, d["meta"], fix_title(d["seo_title"])])
                 mergado_count += 1
     log(f"Uloženo: {mergado_path} ({mergado_count} řádků, párování přes @id) "
         f"— {skipped_no_id} produktů přeskočeno (chybí @id v feedu)")
