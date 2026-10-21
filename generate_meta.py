@@ -285,6 +285,20 @@ def parse_loose_json(raw):
     raise ValueError("Nelze přečíst odpověď API")
 
 
+# znaky, které v českém textu nemají co dělat (azbuka, řečtina, CJK…) —
+# model občas „uklouzne" a vloží slovo v jiném písmu
+FOREIGN_SCRIPT = re.compile(r"[\u0370-\u03FF\u0400-\u052F\u0590-\u06FF\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]")
+
+
+def output_problem(meta, title):
+    """Vrátí popis problému, nebo None, když je výstup v pořádku."""
+    if not meta or not title:
+        return "prázdný popis nebo titulek"
+    if FOREIGN_SCRIPT.search(meta + title):
+        return "cizí písmo (např. azbuka) v textu"
+    return None
+
+
 class PermanentError(Exception):
     """Chyba, kterou opakování nevyřeší (a jen by stálo kredit)."""
 
@@ -357,6 +371,13 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     state = load_state()
     done = state["done"]
+    bad_ids = [k for k, v in done.items()
+               if output_problem(v.get("meta", ""), v.get("seo_title", ""))]
+    for k in bad_ids:
+        del done[k]
+    if bad_ids:
+        log(f"Vyřazeno {len(bad_ids)} dříve vygenerovaných popisů s vadou "
+            f"(cizí písmo / prázdné) — vygenerují se znovu.")
 
     items = parse_feed(fetch_feed(FEED_URL))
     for p in items:
@@ -466,6 +487,14 @@ def main():
         if stop_event.is_set():
             raise RuntimeError("Zastaveno (série selhání) — nevoláno")
         res = call_api(build_prompt(p))
+        problem = output_problem((res.get("meta_description") or "").strip(),
+                                 (res.get("seo_title") or "").strip())
+        if problem:
+            res = call_api(build_prompt(p))  # jeden nový pokus
+            problem = output_problem((res.get("meta_description") or "").strip(),
+                                     (res.get("seo_title") or "").strip())
+            if problem:
+                raise ValueError(f"Vadný výstup: {problem}")
         return p, res
 
     with ThreadPoolExecutor(max_workers=CONCURRENCY) as pool:
@@ -537,6 +566,8 @@ def main():
         # jinak (obsahuje i shoptet položku) řádek patří i do shoptet exportu
         row_source = "shoptet" if "shoptet" in g["sources"] and "mergado" not in g["sources"] else "mergado"
         for code in g["codes"]:   # jeden řádek na variantu — skutečné kódy zboží
+            if code in g["shopitem_ids"]:
+                continue  # náhradní interní @id, ne kód zboží -> v Shoptetu by se nespároval
             rows.append({
                 "code": code,
                 "name": g["name"],
@@ -553,23 +584,35 @@ def main():
         w.writeheader()
         w.writerows({k: v for k, v in r.items() if k != "source"} for r in rows)
 
-    # stabilní kopie pro Shoptet — JEN produkty výhradně mimo Mergado (source=="shoptet").
-    # Produkty z Mergado feedu se do Shoptetu propíší automaticky přes Mergado
-    # import, takže je sem záměrně nedáváme (žádný zbytečný duplicitní import).
-    # Kódy začínající nulou dostávají prefix "$" — Shoptetem doporučená ochrana
-    # proti tomu, že Excel při otevření souboru useknuté nuly na začátku smaže
-    # (0123 -> 123), což by rozbilo párování při zpětném importu.
-    shoptet_rows = [r for r in rows if r["source"] == "shoptet"]
+    # ---------- soubory pro IMPORT DO SHOPTETU ----------
+    # Jen 3 sloupce (code;metaDescription;seoTitle) — import tak nemůže změnit
+    # název ani kategorii a soubor se dá nahrát rovnou, bez otevírání v Excelu
+    # (Excel kazí kódy: dlouhá čísla -> 4,00117E+12, kódy začínající "-" -> #NÁZEV?).
+    # Kódy začínající nulou dostávají prefix "$" (Shoptet ho při importu odstraní).
+    #   shoptet-meta.csv         = produkty jen v Shoptetu (mimo Mergado)
+    #   shoptet-meta-mergado.csv = produkty z Mergada, pro jednorázové doplnění
+    #                              do Shoptetu přímo (párování přes code)
+    def write_shoptet_csv(path, source):
+        n = 0
+        with open(path, "w", encoding="utf-8-sig", newline="") as f:
+            w = csv.writer(f, delimiter=";")
+            w.writerow(["code", "metaDescription", "seoTitle"])
+            for r in rows:
+                if r["source"] != source:
+                    continue
+                code = r["code"]
+                if code.startswith("0"):
+                    code = "$" + code
+                w.writerow([code, r["metaDescription"], r["seoTitle"]])
+                n += 1
+        return n
+
     stable_path = os.path.join(OUTPUT_DIR, "shoptet-meta.csv")
-    with open(stable_path, "w", encoding="utf-8-sig", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["code", "name", "metaDescription", "seoTitle", "categoryText"], delimiter=";")
-        w.writeheader()
-        for r in shoptet_rows:
-            row = {k: v for k, v in r.items() if k != "source"}
-            if row["code"].startswith("0"):
-                row["code"] = "$" + row["code"]
-            w.writerow(row)
-    log(f"Uloženo: {stable_path} ({len(shoptet_rows)} řádků — jen produkty mimo Mergado, stabilní URL pro Shoptet)")
+    n = write_shoptet_csv(stable_path, "shoptet")
+    log(f"Uloženo: {stable_path} ({n} řádků — produkty mimo Mergado)")
+    shoptet_mergado_path = os.path.join(OUTPUT_DIR, "shoptet-meta-mergado.csv")
+    n = write_shoptet_csv(shoptet_mergado_path, "mergado")
+    log(f"Uloženo: {shoptet_mergado_path} ({n} řádků — produkty z Mergada, import do Shoptetu přes code)")
 
     # ---------- export pro MERGADO (pravidlo Import datového souboru) ----------
     # Podle podpory Mergada: párovací klíč MUSÍ být první sloupec a musí
