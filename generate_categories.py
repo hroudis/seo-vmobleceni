@@ -52,31 +52,66 @@ BATCH_LIMIT = int(os.environ.get("BATCH_LIMIT") or "1000")
 DRY_RUN = os.environ.get("DRY_RUN", "false").strip().lower() in ("1", "true", "yes")
 REGENERATE = os.environ.get("REGENERATE", "").strip()
 
-CATS_FILE = "kategorie.csv"
+CATS_FILE = "kategorie-shoptet.csv"   # export z Shoptetu: Produkty > Kategorie > Export
 STATE_FILE = "state-kategorie.json"
 OUTPUT_DIR = "output"
 SITE = "https://www.vmobleceni.cz"
 
-# kategorie, pro které se popis negeneruje (akční/sezónní, mění se obsah)
-SKIP_URL_PARTS = ("black-friday", "slevy-az-80")
+# kategorie, pro které se popis negeneruje (akční/sezónní/pomocné)
+SKIP_URL_PARTS = ("black-friday", "slevy-az-80", "velkoobchod", "doplnky-nerozdeleno", "ostatni-2")
 
 
 # ---------------------------------------------------------------- strom kategorií
+def read_shoptet_export():
+    """Načte export kategorií ze Shoptetu (CSV, středník, windows-1250)."""
+    raw = open(CATS_FILE, "rb").read()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("cp1250")
+    reader = csv.DictReader(__import__("io").StringIO(text, newline=""), delimiter=";")
+    return reader.fieldnames, list(reader)
+
+
 def load_categories():
+    _, rows = read_shoptet_export()
+    by_slug = {r["url"]: r for r in rows}
+
+    def visible(r):
+        # kategorie je vidět, jen když je viditelná ona i všichni předci
+        while r:
+            if r.get("visible") != "1":
+                return False
+            r = by_slug.get(r.get("parentUrl") or "")
+        return True
+
     cats = []
-    with open(CATS_FILE, encoding="utf-8") as f:
-        for r in csv.DictReader(f, delimiter=";"):
-            r["uroven"] = int(r["uroven"])
-            cats.append(r)
+    for r in rows:
+        if not visible(r):
+            continue
+        cats.append({
+            "id": r["id"],
+            "slug": r["url"],
+            "url": f"{SITE}/{r['url'].strip('/')}/",
+            "rodic_url": f"{SITE}/{r['parentUrl'].strip('/')}/" if r.get("parentUrl") else "",
+            "nazev": r["title"].strip(),                         # název v administraci (= cesta ve feedech)
+            "nazev_seo": (r.get("linkText") or r["title"]).strip(),  # název v menu
+            "puvodni_horni": r.get("topDescription", ""),
+        })
     by_url = {c["url"]: c for c in cats}
     for c in cats:
+        if c["rodic_url"] not in by_url:
+            c["rodic_url"] = ""
+    for c in cats:
         c["children"] = [x["url"] for x in cats if x["rodic_url"] == c["url"]]
-        # cesta původních názvů (pro párování s feedem)
-        names, cur = [], c
+        names, seo, cur = [], [], c
         while cur:
             names.insert(0, cur["nazev"])
+            seo.insert(0, cur["nazev_seo"])
             cur = by_url.get(cur["rodic_url"])
         c["names"] = names
+        c["cesta"] = " > ".join(seo)
+        c["uroven"] = len(names)
     return cats, by_url
 
 
@@ -333,7 +368,7 @@ def md_to_html(text):
     """## nadpis, - odrážky, odstavce, [[url|text]] -> HTML."""
     def inline(t):
         t = html.escape(t, quote=False)
-        return LINK_RE.sub(lambda m: f'<a href="{html.escape(m.group(1))}">{m.group(2)}</a>', t)
+        return LINK_RE.sub(lambda m: f'<a href="{html.escape(m.group(1).replace(SITE, ""))}">{m.group(2)}</a>', t)
     out, para, items = [], [], []
 
     def flush():
@@ -428,6 +463,36 @@ def build_result(text, allowed):
 
 
 # ---------------------------------------------------------------- výstupy
+def write_import_file(done):
+    """Soubor pro Shoptet: Produkty > Kategorie > Import.
+    Obsahuje VŠECHNY řádky původního exportu beze změny (struktura, názvy, URL,
+    viditelnost) — mění se jen 4 pole u kategorií, které mají nový text.
+    Díky tomu import nemůže nic smazat ani přesunout."""
+    fields, rows = read_shoptet_export()
+    changed = kept_pobo = 0
+    for r in rows:
+        d = done.get(f"{SITE}/{r['url'].strip('/')}/")
+        if not d:
+            continue
+        if "pobo" in (r.get("topDescription") or "").lower():
+            kept_pobo += 1  # obsah z doplňku Pobo (page builder) nepřepisujeme
+        else:
+            r["topDescription"] = d["perex_html"]
+        r["bottomDescription"] = d["popis_html"]
+        r["metaTitle"] = d["seo_title"]
+        r["metaDescription"] = d["meta_description"]
+        changed += 1
+    out = os.path.join(OUTPUT_DIR, "kategorie-import.csv")
+    with open(out, "w", encoding="cp1250", errors="xmlcharrefreplace", newline="") as f:
+        f.write(";".join(fields) + "\r\n")
+        w = csv.DictWriter(f, fieldnames=fields, delimiter=";", quoting=csv.QUOTE_ALL,
+                           lineterminator="\r\n", extrasaction="ignore")
+        for r in rows:
+            w.writerow({k: (v if v is not None else "") for k, v in r.items() if k is not None})
+    log(f"Uloženo: {out} ({len(rows)} řádků, z toho {changed} s novým textem"
+        + (f", u {kept_pobo} ponechán horní popis z Pobo" if kept_pobo else "") + ")")
+
+
 def write_outputs(cats, done, stats):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     rows = [(c, done[c["url"]]) for c in cats if c["url"] in done]
@@ -438,6 +503,8 @@ def write_outputs(cats, done, stats):
         for c, d in rows:
             w.writerow([c["url"], c["nazev_seo"], c["cesta"], d["seo_title"], d["meta_description"],
                         d["perex_html"], d["popis_html"], d["faq_jsonld"]])
+
+    write_import_file(done)
 
     # ověření odkazů napříč celou sadou: kolik kategorií na danou kategorii odkazuje
     inbound = collections.Counter(u for _, d in rows for u in d["links"])
