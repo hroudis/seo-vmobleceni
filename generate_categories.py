@@ -3,7 +3,7 @@
 """
 SEO popisy KATEGORIÍ pro vmobleceni.cz
 ======================================
-Pro každou kategorii z kategorie.csv vygeneruje:
+Pro každou viditelnou kategorii z exportu Shoptetu (kategorie-shoptet.csv) vygeneruje:
   - perex (krátký popis nad produkty),
   - delší popis pod produkty s nadpisy, odrážkami a VNITŘNÍMI ODKAZY
     na nadřazenou, podřízené a příbuzné kategorie,
@@ -14,7 +14,7 @@ Fakta (počet produktů, materiály, velikosti, značky, typy produktů) se bero
 z produktových feedů (FEED_URL = Mergado, FEED_URL_2 = Shoptet github.xml),
 takže texty popisují skutečný sortiment, ne obecné fráze.
 
-Odkazy smí vést JEN na URL z kategorie.csv — skript každý odkaz ověří,
+Odkazy smí vést JEN na URL viditelných kategorií — skript každý odkaz ověří,
 takže v textu nikdy nevznikne neexistující adresa.
 
 Hotové kategorie se ukládají do state-kategorie.json -> při dalším běhu
@@ -22,7 +22,8 @@ se generují jen chybějící. Přegenerování: proměnná REGENERATE
 ("all" = vše, nebo seznam URL oddělených čárkou).
 
 Výstupy (složka output/):
-  kategorie-popisy.html  — pomocná stránka s tlačítky Kopírovat pro vložení do Shoptetu
+  kategorie-import.csv   — soubor pro Shoptet: Produkty > Kategorie > Import
+  kategorie-popisy.html  — náhled a kontrola textů (pomocná stránka) s tlačítky Kopírovat pro vložení do Shoptetu
   kategorie-popisy.csv   — totéž v tabulce
 """
 
@@ -592,7 +593,7 @@ def main():
     if not API_KEY and not DRY_RUN:
         raise SystemExit("Chybí ANTHROPIC_API_KEY")
     cats, by_url = load_categories()
-    log(f"Kategorií v kategorie.csv: {len(cats)}")
+    log(f"Viditelných kategorií v {CATS_FILE}: {len(cats)}")
 
     feeds = []
     for url, flat in ((FEED_URL, False), (FEED_URL_2, True)):
