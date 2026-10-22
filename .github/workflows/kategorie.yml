@@ -1,0 +1,49 @@
+name: Popisy kategorií
+
+# Spouští se jen ručně (Actions -> Popisy kategorií -> Run workflow).
+on:
+  workflow_dispatch:
+    inputs:
+      batch_limit:
+        description: "Kolik kategorií vygenerovat (pro test 3, pak 1000)"
+        default: "3"
+      dry_run:
+        description: "Jen náhled bez volání API (true/false)"
+        default: "false"
+      regenerate:
+        description: "Přegenerovat: prázdné = jen chybějící, all = vše, nebo URL oddělené čárkou"
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  kategorie:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Vygenerovat popisy kategorií
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FEED_URL: ${{ secrets.FEED_URL }}
+          FEED_URL_2: ${{ secrets.FEED_URL_2 }}
+          MODEL: "claude-haiku-5-5"
+          CONCURRENCY: "4"
+          BATCH_LIMIT: ${{ github.event.inputs.batch_limit }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          REGENERATE: ${{ github.event.inputs.regenerate }}
+        run: python generate_categories.py
+      - name: Uložit výsledky do repozitáře
+        run: |
+          git config user.name "seo-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git pull --rebase || true
+          for f in state-kategorie.json output/kategorie-popisy.html output/kategorie-popisy.csv output/kategorie-nahled.csv; do
+            if [ -f "$f" ]; then git add "$f"; fi
+          done
+          git commit -m "Popisy kategorií" || echo "Nic nového"
+          git push || echo "Push přeskočen"
