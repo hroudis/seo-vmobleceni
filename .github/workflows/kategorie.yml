@@ -42,7 +42,7 @@ jobs:
           git config user.name "seo-bot"
           git config user.email "bot@users.noreply.github.com"
           git pull --rebase || true
-          for f in state-kategorie.json output/kategorie-popisy.html output/kategorie-popisy.csv output/kategorie-nahled.csv; do
+          for f in state-kategorie.json output/kategorie-import.csv output/kategorie-popisy.html output/kategorie-popisy.csv output/kategorie-nahled.csv; do
             if [ -f "$f" ]; then git add "$f"; fi
           done
           git commit -m "Popisy kategorií" || echo "Nic nového"
