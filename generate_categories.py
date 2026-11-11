@@ -143,6 +143,8 @@ def product_type(n):
 def normalize_material(m):
     m = strip_html(m or "").lower()
     m = re.sub(r"^\d+\.\s*", "", m)
+    m = re.sub(r"(\d)\s*%", r"\1%", m)
+    m = re.sub(r"\s*,\s*", " ", m)
     m = re.sub(r"\s+", " ", m).strip(" ,.")
     return m[:60]
 
@@ -212,7 +214,7 @@ def collect_stats(cats, feeds):
                 s["n"] += 1
                 if mat:
                     s["mat"][mat] += 1
-                if man and man.upper() not in ("ITALSKÁ MÓDA", "ITALSKá MóDA"):
+                if man and re.search(r"[A-Za-z]", man) and man.upper() not in ("ITALSKÁ MÓDA", "ITALSKá MóDA"):
                     s["man"][man] += 1
                 for sz in SIZE_RE.findall(name):
                     s["size"][sz.strip()] += 1
@@ -254,43 +256,95 @@ def link_plan(c, by_url, stats, cats):
     if noun:
         rel = [x for x in cats if x["url"] != c["url"] and main_noun(x["nazev_seo"]) == noun
                and x["names"][0] != c["names"][0]]
-        for x in sorted(rel, key=lambda x: -stats[x["url"]]["n"])[:3]:
+        for x in sorted(rel, key=lambda x: -stats[x["url"]]["n"])[:2]:
             add(x["url"], "stejný typ pro jinou skupinu")
+    for slug in complementary_slugs(c):
+        u = f"{SITE}/{slug}/"
+        if u in by_url and sum(1 for l in links if l[2].startswith("doplněk")) < 4:
+            add(u, "doplněk — co se k tomu hodí")
     return links
 
 
+# Co se k čemu hodí (outfit / doplňky). Klíč = regulární výraz na cestu kategorie
+# (malá písmena), hodnota = slugy doplňkových kategorií. Neexistující se ignorují.
+COMPLEMENTS = [
+    (r"^dámské oblečení.*(šaty|sukně|overal|soupravy elegant)",
+     ["bolerko-2", "kabelky", "lodicky-strevice-2", "sandale-2", "puncochove-kalhoty",
+      "cardigany-pletene-teple", "saly-nakrcniky-2", "saka-damske"]),
+    (r"^dámské oblečení.*(kalhoty|rifle|džíny|džegíny|legíny|tepláky|kraťasy|šortky|aladinky)",
+     ["kosile-a-halenky-2", "tricka", "tuniky", "svetry-a-cardigany-2", "tenisky-2", "opasky"]),
+    (r"^dámské oblečení.*(trička|topy|tílka|tuniky|halenky|košile|body|roláky)",
+     ["kalhoty-a-dziny", "sukne", "kratasy-a-sortky", "cardigany-pletene-teple", "kabelky"]),
+    (r"^dámské oblečení.*(svetr|mikin|cardigan|pulóvr|vesty|ponča|bolerk)",
+     ["kalhoty-a-dziny", "teplaky-a-leginy", "saly-nakrcniky-2", "cepice-ksiltovky-klobouky-2"]),
+    (r"^dámské oblečení.*(bundy|kabát|saka)",
+     ["saly-nakrcniky-2", "cepice-ksiltovky-klobouky-2", "rukavice-3", "kozacky-zimni",
+      "svetry-a-cardigany-2"]),
+    (r"^dámské oblečení.*(plavky|župan)", ["zupany-a-letni-prehozy", "zabky-2", "kabelky"]),
+    (r"^dámské oblečení.*(noční|pyžam)", ["zupany", "pantofle-2"]),
+    (r"^dívčí oblečení.*(bundy|kabát|vesty)",
+     ["cepice-satky-saly-celenky", "rukavice", "divci-boty", "divci-mikiny"]),
+    (r"^dívčí oblečení.*(šaty|sukně)", ["divci-punchocace", "divci-puncochace", "divci-boty", "divci-mikiny"]),
+    (r"^dívčí oblečení.*(kalhoty|tepláky|legíny|kraťasy|džíny)", ["divci-tricka", "divci-mikiny", "divci-boty"]),
+    (r"^dívčí oblečení.*(trička|košile|tílka|mikin|svetr)", ["divci-kalhoty", "divci-leginy", "divci-sukne"]),
+    (r"^chlapecké oblečení.*(bundy|kabát|vesty)",
+     ["cepice-satky-saly-celenky", "rukavice", "chlapecke-boty", "chlapecke-svetry"]),
+    (r"^chlapecké oblečení.*(kalhoty|tepláky|kraťasy|džíny|šusťák)", ["chlapecka-tricka", "chlapecke-svetry", "chlapecke-boty"]),
+    (r"^chlapecké oblečení.*(trička|košile|tílka|svetr|mikin)", ["chlapecke-kalhoty", "chlapecke-teplaky", "chlapecke-kratasy"]),
+    (r"^miminka", ["kojenecke-body", "kojenecke-dupacky", "kojenecke-ponozky", "doplnky-pro-kojence", "kojenecke-boty"]),
+]
+
+
+def complementary_slugs(c):
+    # jen hlavní skupina + vlastní název (ne mezilehlé kategorie — „Bundy, kabáty,vesty…"
+    # by jinak u bund spustilo pravidlo pro vesty)
+    root = c["cesta"].split(" > ")[0]
+    path = f"{root} :: {c['nazev_seo']}".lower()
+    out = []
+    for pat, slugs in COMPLEMENTS:
+        if re.search(pat, path):
+            out.extend(x for x in slugs if x != c["slug"] and x not in out)
+    return out
+
+
 # ---------------------------------------------------------------- prompt a API
-INSTRUCTION = """Jsi český e-commerce SEO copywriter pro eshop vmobleceni.cz (dámské, dětské, kojenecké a nadrozměrné oblečení, hodně italské módy).
-Píšeš text KATEGORIE, který funguje pro Google/Seznam i pro AI vyhledávače (ChatGPT, Perplexity, Google AI Overviews):
-- fakta první: co v kategorii zákazník najde, pro koho, z jakých materiálů, v jakých velikostech,
-- konkrétní údaje z dodaných dat, žádné vymyšlené vlastnosti, ceny, slevy ani počty kusů,
-- přirozená čeština, tykání ne — vykej, žádné superlativy typu „nejlepší na trhu",
-- NEPOUŽÍVEJ uvozovky ani znaky < >.
+PROMPT_FILE = "prompt-kategorie.txt"   # zadání, které si můžeš libovolně upravit na GitHubu
 
-ODKAZY: v textu POPIS použij 3 až 6 odkazů zápisem [[URL|text odkazu]].
-- Smíš použít JEN URL ze seznamu POVOLENÉ ODKAZY, přesně jak jsou napsané.
-- Pokud je v seznamu nadřazená kategorie, odkaz na ni použij.
-- Text odkazu je přirozená fráze ve větě (např. „vyberte si i [[URL|letní šaty na ramínka]]"), ne „klikněte zde".
-- Každé URL nejvýše jednou.
+DEFAULT_PROMPT = """Jsi český e-commerce SEO copywriter pro eshop vmobleceni.cz."""
 
-Odpověz PŘESNĚ v tomto formátu (oddělovače ponech):
+# Technická část — tu NEUPRAVUJ v souboru, skript podle ní text zpracovává
+# (oddělovače sekcí, zápis odkazů). Délky a obsah sekcí se řídí prompt-kategorie.txt.
+TECH_RULES = """
+
+----- TECHNICKÁ PRAVIDLA (povinná) -----
+ODKAZY: v sekci POPIS piš odkazy zápisem [[URL|text odkazu]].
+- Smíš použít JEN URL ze seznamu POVOLENÉ ODKAZY níže, přesně jak jsou napsané.
+- Každé URL nejvýše jednou. Jiné odkazy ani HTML nepiš.
+- Nepoužívej znaky < > ani rovné uvozovky ".
+FORMÁTOVÁNÍ POPISU: nadpis = řádek začínající "## ", odrážka = řádek začínající "- ", odstavce odděl prázdným řádkem.
+Odpověz PŘESNĚ v tomto formátu, oddělovače ponech:
 ===PEREX===
-1–2 věty, max 280 znaků, bez odkazů. Co kategorie obsahuje a pro koho.
+(text)
 ===POPIS===
-180–300 slov. Struktura:
-## nadpis (obsahuje název kategorie)
-odstavec
-## nadpis (např. jak vybrat velikost / materiál / k čemu nosit)
-odstavec nebo odrážky začínající „- "
-Odkazy [[URL|text]] rozmísti přirozeně v textu.
+(text)
 ===FAQ===
 Otázka: ...
-Odpověď: ... (1–2 věty)
-(celkem 3 dvojice; otázky, které zákazník skutečně hledá — velikosti, materiál, praní, výběr)
+Odpověď: ...
 ===SEO_TITLE===
-max 60 znaků, klíčové slovo na začátku, končí „ | vmobleceni.cz"
+(text, končí " | vmobleceni.cz")
 ===META===
-140–155 znaků, věcný popis kategorie + jemná výzva k akci"""
+(text)
+"""
+
+
+def load_prompt():
+    if os.path.exists(PROMPT_FILE):
+        with open(PROMPT_FILE, encoding="utf-8-sig") as f:
+            txt = f.read().strip()
+        if txt:
+            return txt
+    log(f"⚠ {PROMPT_FILE} nenalezen — používám jen základní zadání.")
+    return DEFAULT_PROMPT
 
 
 def build_prompt(c, s, links, by_url):
@@ -299,7 +353,6 @@ def build_prompt(c, s, links, by_url):
     data = [
         f"KATEGORIE: {c['nazev_seo']}",
         f"Umístění v eshopu: {' > '.join(by_url[u]['nazev_seo'] for u in path_urls(c, by_url))}",
-        f"Počet produktů v kategorii (přibližně): {s['n']}",
         f"Nejčastější typy produktů: {top(s['type'], 6)}",
         f"Nejčastější materiály: {top(s['mat'], 5)}",
         f"Nejčastější velikostní řady: {top(s['size'], 6)}",
@@ -310,7 +363,7 @@ def build_prompt(c, s, links, by_url):
     ]
     for u, name, role in links:
         data.append(f"- {u}  ({name} — {role})")
-    return INSTRUCTION + "\n\n" + "\n".join(data)
+    return load_prompt() + TECH_RULES + "\n\nDATA KATEGORIE:\n" + "\n".join(data)
 
 
 def path_urls(c, by_url):
@@ -435,7 +488,7 @@ def build_result(text, allowed):
     if len(set(good)) < 2:
         problems.append(f"málo platných odkazů ({len(set(good))})")
     words = len(re.sub(r"\[\[[^|]+\|", "", popis).split())
-    if words < 120:
+    if words < 40:
         problems.append(f"krátký popis ({words} slov)")
     if len(faq) < 2:
         problems.append("chybí FAQ")
@@ -601,7 +654,7 @@ def main():
             try:
                 feeds.append((fetch_feed(url), flat))
             except Exception as e:
-                log(f"⚠ Feed {url[:40]}… se nepodařilo stáhnout: {e}")
+                log(f"⚠ Feed ({'Shoptet' if flat else 'Mergado'}) se nepodařilo stáhnout: {e}")
     stats = collect_stats(cats, feeds)
     log(f"Kategorií s nalezenými produkty: {sum(1 for c in cats if stats[c['url']]['n'])}")
 
