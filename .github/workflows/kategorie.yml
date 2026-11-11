@@ -10,6 +10,9 @@ on:
       dry_run:
         description: "Jen náhled bez volání API (true/false)"
         default: "false"
+      model:
+        description: "Model: claude-haiku-5-5 (levný) nebo claude-sonnet-5-5 (lepší texty, dražší)"
+        default: "claude-haiku-5-5"
       regenerate:
         description: "Přegenerovat: prázdné = jen chybějící, all = vše, nebo URL oddělené čárkou"
         default: ""
@@ -31,7 +34,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           FEED_URL: ${{ secrets.FEED_URL }}
           FEED_URL_2: ${{ secrets.FEED_URL_2 }}
-          MODEL: "claude-haiku-5-5"
+          MODEL: ${{ github.event.inputs.model }}
           CONCURRENCY: "4"
           BATCH_LIMIT: ${{ github.event.inputs.batch_limit }}
           DRY_RUN: ${{ github.event.inputs.dry_run }}
